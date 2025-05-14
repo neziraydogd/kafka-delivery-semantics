@@ -1,0 +1,60 @@
+version: '3' #Specifies the Docker Compose file format version. Version 3 is the recommended format for current Docker Compose implementations.
+
+services:     #The top-level key that defines all the services/containers in this composition.
+  kafka:      #Defines a service named "kafka" which will be the name of the container in Docker.
+    image: confluentinc/cp-kafka:7.5.0      #Specifies the Docker image to use - Confluent's Kafka version 7.5.0, which is the latest stable version of Confluent Platform.
+    container_name: kafka     # Sets a custom container name instead of letting Docker generate a random name. This makes it easier to reference in logs and commands.
+    ports:   #Maps ports from the host machine to the container:
+      - "9092:9092"    # Maps the host's port 9092 to the container's port 9092 for client communication
+      - "9093:9093"    #Maps the host's port 9093 to the container's port 9093 for controller communication
+    environment:
+      # KRaft mode settings
+      KAFKA_NODE_ID: 1   #Sets a unique identifier for this Kafka node. Required for KRaft mode.
+      KAFKA_PROCESS_ROLES: "broker,controller"   # Configures this node to act as both a broker (handles client requests) and a controller (manages metadata) in KRaft mode.
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"   #Defines the controller quorum voters list in the format `nodeId@hostname:port`. Here, we have a single controller (node 1).
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"    #Specifies which listener will be used for controller communication.
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"  #`PLAINTEXT` listener on all interfaces (0.0.0.0) on port 9092 for client connections, `CONTROLLER` listener on all interfaces on port 9093 for controller communication
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"  #Specifies the address that will be given to clients. Sets the PLAINTEXT listener to be advertised as localhost:9092.
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"  #Maps each listener name to a security protocol. Both listeners use PLAINTEXT (unencrypted) protocol.
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"   #Indicates which listener should be used for communication between brokers.
+      # Broker settings
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1 #Sets the replication factor for the internal __consumer_offsets topic to 1 (suitable for single-node development).
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0  #Reduces the delay before the initial consumer group rebalance, which speeds up initial consumer group formation.
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1   # Sets the minimum number of in-sync replicas for the transaction state log topic to 1 (for single-node setup).
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1  #Sets the replication factor for the transaction state log topic to 1 (for single-node setup).
+      # Required for KRaft mode
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"   #Allows Kafka to automatically create topics when they are first published to or subscribed from.
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"   #Sets a unique identifier for the Kafka cluster. Required for KRaft mode. This is a base64-encoded UUID.
+    volumes:
+      - kafka-data:/var/lib/kafka/data    # Mounts a named volume `kafka-data` to the container path `/var/lib/kafka/data` to persist Kafka data between container restarts.
+    networks:    # Connects this container to the custom network `app-net`.
+      - app-net
+    command:   # Overrides the default command with a custom command:
+      - sh
+      - -c
+      - |   # First formats the storage directory using the `CLUSTER_ID` (double $ for Docker Compose variable escaping), Then executes the default entrypoint script from Confluent's image
+        echo "Waiting for Kafka to be ready..."
+        echo "Creating storage directory format with CLUSTER_ID=$${CLUSTER_ID}"
+        kafka-storage format -t $${CLUSTER_ID} -c /etc/confluent/kafka/server.properties
+        exec /etc/confluent/docker/run
+
+  # Kafka UI for management
+  kafka-ui:   # Defines a service named "kafka-ui" for the web-based management interface.
+    image: provectuslabs/kafka-ui:latest   # Specifies the Docker image for Kafka UI, using the latest version of provectuslabs/kafka-ui.
+    container_name: kafka-ui   # Sets a custom container name for easier identification.
+    depends_on:   # Ensures this container starts after the kafka container is running.
+      - kafka
+    ports:
+      - "8080:8080"   # Maps port 8080 on the host to port 8080 in the container, making the UI accessible via http://localhost:8080.
+    environment:    # Environment variables for kafka-ui:
+      KAFKA_CLUSTERS_0_NAME: local-kraft   # Sets the name of the Kafka cluster to "local-kraft"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092   # Configures the bootstrap servers to connect to the Kafka broker at `kafka:9092`
+    networks:   # Connects this container to the same network as the Kafka container.
+      - app-net
+
+networks:   # Creates a custom bridge network named `app-net` for the services to communicate.
+  app-net:
+    driver: bridge
+
+volumes:   # Defines a named volume `kafka-data` that Docker will manage, ensuring data persistence across container restarts.
+  kafka-data:
